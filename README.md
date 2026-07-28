@@ -68,7 +68,66 @@ A physical quarter-car has precisely two resonances, one for each mass, and both
 **Reproducing the headline numbers:** the results table uses `SEQ_LEN = 1000`, `STRIDE = 5`, and `N_SAMPLES = None`, evaluated with `gru_bs128_s5_seq1000_100k.pt` (kept in `models/`).
 
 ---
-
-## Dataset
-
-Quanser Active Suspension benchmark, included in this repository as `data/suspension_dataset.mat` and originally published on Zenodo: <https://zenodo.org/records/17232645> (scroll to the bottom of the record for `suspension_dataset.mat`). Road profiles follow the ISO 8608 PSD formulation as multisine signals across five roughness classes A–E, 100,000 samples per class at 1 kHz — a 2 km road traversed at 20 m/s. Measured displacements span four periods; period 1 is discarded as transient and period 2 is used for training. Only the unsuppressed (full-signal) data is used.
+## System & Method
+ 
+- **Dataset:** Quanser Active Suspension benchmark, committed to the repository as `data/suspension_dataset.mat` and originally published on Zenodo (<https://zenodo.org/records/17232645>). Road profiles follow the ISO 8608 PSD formulation as multisine signals across five roughness classes A–E, 100,000 samples per class at 1 kHz — a 2 km road traversed at 20 m/s. Measured displacements span four periods; period 1 is discarded as transient and period 2 is used for training. Only the unsuppressed (full-signal) data is used.
+- **Normalisation:** Global z-score, computed once across all classes and saved to `models/zscore_stats.pkl` so inference and evaluation denormalise with exactly the statistics the model was trained under. MinMax scaling was rejected because Class E amplitudes are roughly an order of magnitude larger than Class A, which squashed the smooth roads to nearly nothing.
+- **Windowing:** `numpy.lib.stride_tricks.sliding_window_view` builds every 1,000-sample window in one vectorised pass, then a stride of 5 subsamples them. The target is the displacement at the *last* sample of each window, making this a causal many-to-one predictor — it never sees road ahead of the wheel. Windows are shuffled before a 90/10 train/validation split.
+- **Architecture:** Two stacked GRU layers (hidden size 128) with ReLU between them, the final timestep's hidden state passed to three fully connected layers of width 200, then a linear output layer producing body and tyre displacement (~256k trainable parameters).
+- **Training:** MSE loss, NAdam optimiser, `ReduceLROnPlateau` (factor 0.9, patience 10, min LR 1e-16), batch size 128, up to 300 epochs with early stopping after 50 epochs without improvement. The best-validation checkpoint is saved to `models/`.
+- **Evaluation:** Per-class RMSE, MAE, NRMSE (by both range and standard deviation) and correlation, plus out-of-distribution tests — speed bumps at several heights, a pothole, the sine sweep shown above, and a quarter-car model fitted to the network's own output as a physical sanity check.
+---
+ 
+## Tech Stack
+ 
+- **Language:** Python (Jupyter Notebooks)
+- **Deep learning:** PyTorch (GRU, NAdam, ReduceLROnPlateau)
+- **Numerics and signals:** NumPy, SciPy (`loadmat`, `solve_ivp`, `lsim`, `minimize`)
+- **Utilities:** scikit-learn, joblib (scaler persistence)
+- **Visualization:** Matplotlib
+---
+ 
+## Repository Structure
+ 
+```
+.
+├── notebooks/
+│   ├── train_suspension_gru.ipynb       # Data loading, training, quarter-car comparison
+│   └── evaluate_suspension_gru.ipynb    # Per-class metrics, frequency and bump tests
+├── models/
+│   ├── gru_bs128_s5_seq1000_100k.pt      # Checkpoint used for all reported results
+│   └── zscore_stats.pkl                  # Normalisation statistics (written by training)
+├── data/
+│   └── suspension_dataset.mat            # Quanser benchmark data (tracked)
+├── figures/                              # Plots used in this README
+├── reports/                              # Written report and poster
+├── requirements.txt
+└── README.md
+```
+ 
+---
+ 
+## How to Run
+ 
+```bash
+git clone https://github.com/PremYaragarla/Suspension-NN.git
+cd Suspension-NN
+pip install -r requirements.txt
+jupyter lab         # Or Jupyter Notebook
+```
+ 
+The dataset ships with the repository at `data/suspension_dataset.mat`, so there is nothing to download — the notebooks run straight after a clone. Run the evaluation notebook to reproduce every result above from the committed checkpoint; run the training notebook to retrain from scratch.
+ 
+**Requirements:** [numpy, scipy, torch, scikit-learn, joblib, matplotlib, jupyter, or `pip install -r requirements.txt`]
+ 
+**Training hardware:** The model was trained on GTX 1660 Ti. Training can be done on a CPU, but it is VERY slow at full size. For a quick pass, set `N_SAMPLES = 10_000` in the configuration cell; leave it at `None` for the full 100,000 samples per class on a GPU.
+ 
+---
+ 
+## What I'd Improve Next
+ 
+- **Fix the small-amplitude bias.** Class E dominates the MSE and pulls accuracy away from smooth roads (13.3 % vs 2.0 % NRMSE/std on the body). Weighting the loss per class, normalising each class independently, or training on relative rather than absolute error should all narrow the gap on Class A.
+- **Add a physics-informed loss term.** An energy-balance or quarter-car residual penalty would push predictions toward physically consistent trajectories. The fitted quarter-car parameters already in the training notebook give a starting point, though the real system's nonlinearities may conflict with a simplified constraint, so this needs testing rather than assuming.
+- **Benchmark against Hammerstein-Wiener.** The dataset ships with reference predictions from a classical nonlinear block model. Scoring the GRU against it on identical windows would turn "the errors are small" into "the errors are smaller than the standard baseline."
+- **Move beyond synthetic roads.** Every profile here is ISO 8608 multisine. Measured road data would be the real test of whether the model learned suspension dynamics or the statistics of the generator.
+- **Run it in the loop.** The end goal is an ECU that predicts displacement a few milliseconds ahead and adjusts damping accordingly — which means a fixed sample rate, a bounded inference budget, and testing against the Quanser rig in real time.
