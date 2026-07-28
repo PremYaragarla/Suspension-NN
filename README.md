@@ -34,7 +34,7 @@ Absolute error grows with roughness, but *relative* accuracy moves the other way
 
 Training was stopped when the validation loss spiked rather than letting the early-stopping counter run out; the best checkpoint by validation MSE is the one kept.
  
-![Predicted vs actual scatter](figures/classE_parity.png)
+![Predicted vs actual scatter](figures/classE_correlations.png)
  
 The parity plot shows the errors are unbiased and evenly spread rather than concentrated at the extremes of travel — the model is not simply clipping large excursions.
 
